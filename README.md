@@ -1,6 +1,8 @@
 # redisobj
 Redis Model Mapping
 
+[![Open in Visual Studio Code](https://open.vscode.dev/badges/open-in-vscode.svg)](https://open.vscode.dev/wspowell/redisobj)
+
 This is an experiment to see how redis can be mapped to models in order to abstract away the majority of redis calls.
 Storage is backed by go-redis.
 
