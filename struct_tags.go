@@ -22,10 +22,12 @@ type objStruct struct {
 
 	// redisValueFields stores definitions of all redis values.
 	redisValueFields []redisValue
+
+	// redisHashFields stores definitions of all redis hashes.
+	redisHashFields []redisHash
 }
 
 func (self objStruct) key(objValue reflect.Value) string {
-
 	key := self.objName
 
 	if self.keyField != -1 {
@@ -56,6 +58,7 @@ func newObjStruct(obj interface{}) (objStruct, error) {
 
 	structFields := map[string]objStruct{}
 	redisValueFields := []redisValue{}
+	redisHashFields := []redisHash{}
 
 	// Iterate over all available fields and read the tag value
 	for i := 0; i < objType.NumField(); i++ {
@@ -81,12 +84,24 @@ func newObjStruct(obj interface{}) (objStruct, error) {
 					return objStruct{}, err
 				}
 				redisValueFields = append(redisValueFields, redisValueRef)
+			} else if tagValue, exists := fieldType.Tag.Lookup(structTagRedisHash); exists {
+				tagParts := strings.SplitN(tagValue, ",", 2)
+				if len(tagParts) == 2 && strings.EqualFold(tagParts[1], "key") {
+					objStructRef.keyField = i
+				}
+
+				redisHashRef, err := newRedisHash(i, tagParts[0])
+				if err != nil {
+					return objStruct{}, err
+				}
+				redisHashFields = append(redisHashFields, redisHashRef)
 			}
 		}
 	}
 
 	objStructRef.structFields = structFields
 	objStructRef.redisValueFields = redisValueFields
+	objStructRef.redisHashFields = redisHashFields
 
 	return objStructRef, nil
 }
