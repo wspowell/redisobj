@@ -198,6 +198,41 @@ func setFieldFromString(field reflect.Value, value string) error {
 	return fmt.Errorf("%w: could not set value (%v) from string (%s)", ErrInvalidFieldType, field, value)
 }
 
+func valueToString(value reflect.Value) (string, error) {
+	switch typedValue := value.Interface().(type) {
+	case string:
+		return typedValue, nil
+	case bool:
+		return strconv.FormatBool(typedValue), nil
+	case int:
+		return strconv.FormatInt(int64(typedValue), 10), nil
+	case int8:
+		return strconv.FormatInt(int64(typedValue), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(typedValue), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(typedValue), 10), nil
+	case int64:
+		return strconv.FormatInt(int64(typedValue), 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(typedValue), 10), nil
+	case uint8:
+		return strconv.FormatUint(uint64(typedValue), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(typedValue), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(typedValue), 10), nil
+	case uint64:
+		return strconv.FormatUint(uint64(typedValue), 10), nil
+	case float32:
+		return strconv.FormatFloat(float64(typedValue), 'f', -1, 32), nil
+	case float64:
+		return strconv.FormatFloat(float64(typedValue), 'f', -1, 64), nil
+	}
+
+	return "", fmt.Errorf("%w: could not convert value to string: %v", ErrInvalidFieldType, value.Interface())
+}
+
 func isStringParsable(t reflect.Type) bool {
 	switch t.Kind() {
 	case reflect.String:

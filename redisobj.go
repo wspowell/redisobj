@@ -44,17 +44,17 @@ type Reader interface {
 
 type Store struct {
 	redisClient redis.UniversalClient
-	objTypes    map[string]objStruct
+	objTypes    map[string]*objStruct
 }
 
 func NewStore(redisClient redis.UniversalClient) *Store {
 	return &Store{
 		redisClient: redisClient,
-		objTypes:    map[string]objStruct{},
+		objTypes:    map[string]*objStruct{},
 	}
 }
 
-func (self *Store) getObjectStruct(obj interface{}) (reflect.Value, objStruct, error) {
+func (self *Store) getObjectStruct(obj interface{}) (*objStruct, reflect.Value, error) {
 	var err error
 	objValue := reflect.ValueOf(obj)
 	if objValue.Kind() == reflect.Ptr {
@@ -65,23 +65,23 @@ func (self *Store) getObjectStruct(obj interface{}) (reflect.Value, objStruct, e
 		// Lazy initialize struct definitions.
 		objStructRef, err = newObjStruct(obj)
 		if err != nil {
-			return objValue, objStructRef, err
+			return objStructRef, objValue, err
 		}
 		self.objTypes[objValue.Type().Name()] = objStructRef
 	}
 
-	return objValue, objStructRef, nil
+	return objStructRef, objValue, nil
 }
 
 func (self *Store) Write(obj interface{}, options ...Option) error {
-	objValue, objStructRef, err := self.getObjectStruct(obj)
+	objStructRef, objValue, err := self.getObjectStruct(obj)
 	if err != nil {
 		return nil
 	}
 
 	pipe := self.redisClient.Pipeline()
 
-	if err = self.writeStruct(pipe, rootKey, objValue, objStructRef, options...); err != nil {
+	if err = self.writeStruct(pipe, objStructRef, objValue, options...); err != nil {
 		return err
 	}
 
@@ -95,112 +95,36 @@ func (self *Store) Write(obj interface{}, options ...Option) error {
 	return nil
 }
 
-func (self *Store) writeStruct(pipe redis.Pipeliner, parentKey string, objValue reflect.Value, objStructRef objStruct, options ...Option) error {
-	for fieldName, embeddedObjStructRef := range objStructRef.structFields {
-		objStructValue := objValue.FieldByName(fieldName)
-		parentKey := parentKey + ":" + objStructRef.key(objValue)
-		if err := self.writeStruct(pipe, parentKey, objStructValue, embeddedObjStructRef, options...); err != nil {
+func (self *Store) writeStruct(pipe redis.Pipeliner, objStructRef *objStruct, objValue reflect.Value, options ...Option) error {
+	for _, embeddedObjStructRef := range objStructRef.structFields {
+		objStructValue := objValue.Field(embeddedObjStructRef.structData.structIndex)
+		if err := self.writeStruct(pipe, embeddedObjStructRef, objStructValue, options...); err != nil {
 			return err
 		}
 	}
 
-	for _, redisValueField := range objStructRef.redisValueFields {
-		self.writeValue(pipe, parentKey, objValue, objStructRef, redisValueField, options...)
+	for _, valueField := range objStructRef.valueFields {
+		if err := valueField.redisWriteFn(pipe, objValue, options...); err != nil {
+			return err
+		}
 	}
 
-	for _, redisHashField := range objStructRef.redisHashFields {
-		self.writeHash(pipe, parentKey, objValue, objStructRef, redisHashField, options...)
+	for _, sliceField := range objStructRef.sliceFields {
+		if err := sliceField.redisWriteFn(pipe, objValue, options...); err != nil {
+			return err
+		}
+	}
+
+	for _, mapField := range objStructRef.mapFields {
+		if err := mapField.redisWriteFn(pipe, objValue, options...); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (self *Store) writeValue(pipe redis.Pipeliner, parentKey string, objValue reflect.Value, objStructRef objStruct, redisValueRef redisValue, options ...Option) {
-	key := parentKey + ":" + objStructRef.key(objValue) + ":" + redisValueRef.key
-	value := objValue.Field(redisValueRef.fieldNum).Interface()
-
-	var optionNx bool
-	var optionXx bool
-	var ttl time.Duration
-
-	for _, option := range options {
-		switch option.name {
-		case OptionIfNotExists.name:
-			optionNx = true
-		case OptionIfExists.name:
-			optionXx = true
-		case "ttl":
-			ttl = option.value.(time.Duration)
-		}
-	}
-
-	if optionNx {
-		pipe.SetNX(key, value, ttl)
-	} else if optionXx {
-		pipe.SetXX(key, value, ttl)
-	} else {
-		pipe.Set(key, value, ttl)
-	}
-}
-
-func (self *Store) writeHash(pipe redis.Pipeliner, parentKey string, objValue reflect.Value, objStructRef objStruct, redisHashRef redisHash, options ...Option) {
-	key := parentKey + ":" + objStructRef.key(objValue)
-
-	var optionNx bool
-	var ttl time.Duration
-
-	for _, option := range options {
-		switch option.name {
-		case OptionIfNotExists.name:
-			optionNx = true
-		case "ttl":
-			ttl = option.value.(time.Duration)
-		}
-	}
-
-	value := objValue.Field(redisHashRef.fieldNum)
-	if value.Kind() == reflect.Map {
-		// Maps get put into their own keys.
-		key += ":" + redisHashRef.key
-
-		if len(value.MapKeys()) == 0 {
-			return
-		}
-
-		// FIXME: There is no easy way to convert map[string]string into anything other than map[string]<T>.
-		//        The writeHash() needs to change to only support map[string]<T>.
-		valueMap := make(map[string]interface{}, len(value.MapKeys()))
-
-		iter := value.MapRange()
-		for iter.Next() {
-			key := iter.Key()
-			value := iter.Value()
-
-			valueMap[fmt.Sprintf("%v", key)] = value.Interface()
-		}
-
-		if optionNx {
-			for field, value := range valueMap {
-				pipe.HSetNX(key, field, value)
-			}
-		} else {
-			// There is no HSetXX. Just call HSet.
-			pipe.HSet(key, valueMap)
-		}
-	} else {
-		if optionNx {
-			pipe.HSetNX(key, redisHashRef.key, value.Interface())
-		} else {
-			// There is no HSetXX. Just call HSet.
-			pipe.HSet(key, redisHashRef.key, value.Interface())
-		}
-	}
-
-	if ttl != 0 {
-		pipe.Expire(key, ttl)
-	}
-}
-
+/*
 type readResultsCallback func(result redis.Cmder) error
 
 func (self *Store) Read(obj interface{}) error {
@@ -324,3 +248,4 @@ func (self *Store) readHash(pipe redis.Pipeliner, callbacks *[]readResultsCallba
 
 	return nil
 }
+*/
