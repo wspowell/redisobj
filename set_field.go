@@ -197,3 +197,38 @@ func setFieldFromString(field reflect.Value, value string) error {
 
 	return fmt.Errorf("%w: could not set value (%v) from string (%s)", ErrInvalidFieldType, field, value)
 }
+
+func isStringParsable(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.String:
+		return true
+	case reflect.Bool:
+		return true
+	case reflect.Int:
+		return true
+	case reflect.Int8:
+		return true
+	case reflect.Int16:
+		return true
+	case reflect.Int32:
+		return true
+	case reflect.Int64:
+		return true
+	case reflect.Uint:
+		return true
+	case reflect.Uint8:
+		return true
+	case reflect.Uint16:
+		return true
+	case reflect.Uint32:
+		return true
+	case reflect.Uint64:
+		return true
+	case reflect.Float32:
+		return true
+	case reflect.Float64:
+		return true
+	}
+
+	return false
+}

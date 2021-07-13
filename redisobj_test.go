@@ -26,12 +26,12 @@ func Test_Store_Value(t *testing.T) {
 	redisClient.FlushAll()
 
 	type nested struct {
-		NestedString string `redisValue:"foo"`
-		NestedInt    int    `redisValue:"bar,key"`
+		NestedString string
+		NestedInt    int `redisobj:"key"`
 	}
 	type value struct {
-		Foo    string `redisValue:"foo,key"`
-		Bar    int    `redisValue:"bar"`
+		Foo    string `redisobj:"key"`
+		Bar    int
 		Nested nested
 	}
 
