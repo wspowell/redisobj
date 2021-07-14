@@ -44,7 +44,7 @@ type Reader interface {
 
 type Store struct {
 	redisClient redis.UniversalClient
-	objTypes    map[string]*objStruct
+	objTypes    map[string]*objStruct // FIXME: Need to sync this map
 }
 
 func NewStore(redisClient redis.UniversalClient) *Store {
