@@ -74,6 +74,7 @@ func Test_Store(t *testing.T) {
 
 			{
 				readObject := value{
+					Foo: "my_foo",
 					Nested: nested{
 						NestedInt: 15,
 					},
@@ -89,6 +90,14 @@ func Test_Store(t *testing.T) {
 				}
 				err = objStore.Read(&readObject)
 				assert.Nil(t, err)
+
+				fmt.Printf("%+v\n", readObject)
+			}
+
+			{
+				readObject := nested{}
+				err = objStore.Read(&readObject)
+				assert.ErrorIs(t, err, redisobj.ErrObjectNotFound)
 
 				fmt.Printf("%+v\n", readObject)
 			}

@@ -212,6 +212,11 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 					redisValue, err := result.(*redis.StringCmd).Result()
 					if err != nil {
 						if err == redis.Nil {
+							// Return a "not found" error if this was a key.
+							if objStructRef.keyFieldIndex == data.structIndex {
+								return ErrObjectNotFound
+							}
+
 							redisValue = ""
 						} else {
 							return fmt.Errorf("%w: %s", ErrRedisCommandError, err)
@@ -248,7 +253,7 @@ func (self objStruct) writeToRedis(pipe redis.Pipeliner, keyPrefix string, objVa
 
 	// This struct is the root or is keyed so utilize hash tags to co-locate the data on the same redis node.
 	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
-		key = "#{" + key + "}"
+		key = "{" + key + "}"
 	}
 
 	for _, structField := range self.structFields {
@@ -294,7 +299,7 @@ func (self objStruct) readFromRedis(pipe redis.Pipeliner, callbacks *[]readResul
 
 	// This struct is the root or is keyed so utilize hash tags to co-locate the data on the same redis node.
 	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
-		key = "#{" + key + "}"
+		key = "{" + key + "}"
 	}
 
 	for _, structField := range self.structFields {
