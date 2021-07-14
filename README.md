@@ -20,7 +20,7 @@ objStore := redisobj.NewStore(redisClient)
 All keys stored with redisobj are co-located on redis nodes by utilizing redis hash tags. 
 
 ### Singleton
-A singleton struct can be saved to redis with no modifications. The struct can then be read simply by read the data into the same struct type.
+A singleton struct can be saved to redis with no modifications to existing struct code. The struct can then be read simply by read the data into the same struct type.
 ```
 type Singleton struct {
   GlobalValue string
@@ -39,11 +39,12 @@ Writing the same object with different values will override the data stored in r
 
 Since the key is not based on any data, that means it can retrieved using any instance of Singleton.
 ```
-err := objStore.Write(singleton)
+singleton := Singleton{}
+err := objStore.Read(&singleton)
 ```
 
 ### Keyed Data
-Objects that are based on keys or IDs can be used by providing a struct field with the struct tag "key".
+Objects that are based on keys or IDs can be used by providing a struct field with the struct tag value "key".
 ```
 type Item struct {
   Id       string            `redisobj:"key"`
@@ -125,7 +126,7 @@ type Metadata struct {
   Info string
 }
 ```
-3. The nested struct has a key
+3. Both root struct and nested struct have a key
   * The struct have different key prefixes and may be found in different hash slots
 ```
 // {redisobj:Item:<Id>}
