@@ -1,6 +1,7 @@
 package redisobj_test
 
 import (
+	"fmt"
 	"redisobj"
 	"testing"
 	"time"
@@ -70,6 +71,28 @@ func Test_Store(t *testing.T) {
 
 			err = objStore.Write(testCase.writeObject, testCase.options...)
 			assert.Nil(t, err)
+
+			{
+				readObject := value{
+					Nested: nested{
+						NestedInt: 15,
+					},
+				}
+				err = objStore.Read(&readObject)
+				assert.Nil(t, err)
+
+				fmt.Printf("%+v\n", readObject)
+			}
+			{
+				readObject := nested{
+					NestedInt: 15,
+				}
+				err = objStore.Read(&readObject)
+				assert.Nil(t, err)
+
+				fmt.Printf("%+v\n", readObject)
+			}
+			t.Fail()
 		})
 	}
 }

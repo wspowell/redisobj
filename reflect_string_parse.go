@@ -195,7 +195,7 @@ func setFieldFromString(field reflect.Value, value string) error {
 		}
 	}
 
-	return fmt.Errorf("%w: could not set value (%v) from string (%s)", ErrInvalidFieldType, field, value)
+	return fmt.Errorf("%w: could not set value (%s) from string (%s)", ErrInvalidFieldType, field.Kind(), value)
 }
 
 func valueToString(value reflect.Value) (string, error) {
