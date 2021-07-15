@@ -84,7 +84,12 @@ func (self *Store) getObjectStruct(obj interface{}) (*objStruct, reflect.Value, 
 	return objStructRef, objValue, nil
 }
 
-func (self *Store) Write(ctx context.Context, obj interface{}, options ...Option) error {
+type Options struct {
+	EnableCaching bool
+	Ttl           time.Duration
+}
+
+func (self *Store) Write(ctx context.Context, obj interface{}, options Options) error {
 	objStructRef, objValue, err := self.getObjectStruct(obj)
 	if err != nil {
 		return nil
@@ -92,7 +97,7 @@ func (self *Store) Write(ctx context.Context, obj interface{}, options ...Option
 
 	pipe := self.redisClient.WithContext(ctx).Pipeline()
 
-	if err = objStructRef.writeToRedis(ctx, self.redisClient, pipe, rootKeyPrefix, objValue, options...); err != nil {
+	if err = objStructRef.writeToRedis(ctx, self.redisClient, pipe, rootKeyPrefix, objValue, options); err != nil {
 		return err
 	}
 
@@ -108,7 +113,7 @@ func (self *Store) Write(ctx context.Context, obj interface{}, options ...Option
 
 type readResultsCallback func(result redis.Cmder) error
 
-func (self *Store) Read(ctx context.Context, obj interface{}) error {
+func (self *Store) Read(ctx context.Context, obj interface{}, options Options) error {
 	objStructRef, objValue, err := self.getObjectStruct(obj)
 	if err != nil {
 		return nil
@@ -117,7 +122,7 @@ func (self *Store) Read(ctx context.Context, obj interface{}) error {
 	pipe := self.redisClient.WithContext(ctx).Pipeline()
 
 	callbacks := []readResultsCallback{}
-	if err := objStructRef.readFromRedis(ctx, self.redisClient, pipe, &callbacks, rootKeyPrefix, objValue); err != nil {
+	if err := objStructRef.readFromRedis(ctx, self.redisClient, pipe, &callbacks, rootKeyPrefix, objValue, options); err != nil {
 		return err
 	}
 

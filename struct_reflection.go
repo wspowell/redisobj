@@ -22,7 +22,7 @@ type reflectionData struct {
 	objType      reflect.Type
 	objName      string
 	structIndex  int
-	redisWriteFn func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options ...Option) error
+	redisWriteFn func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, ttl time.Duration) error
 	redisReadFn  func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value) readResultsCallback
 }
 
@@ -83,18 +83,9 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 				objName:     fieldType.Name,
 				structIndex: structFieldIndex,
 			}
-			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options ...Option) error {
+			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, ttl time.Duration) error {
 				key := keyPrefix + "." + data.objName
 				sliceField := objValue.Field(data.structIndex)
-
-				var ttl time.Duration
-
-				for _, option := range options {
-					switch option.name {
-					case "ttl":
-						ttl = option.value.(time.Duration)
-					}
-				}
 
 				if sliceField.Len() == 0 {
 					return nil
@@ -171,18 +162,9 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 				objName:     fieldType.Name,
 				structIndex: structFieldIndex,
 			}
-			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options ...Option) error {
+			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, ttl time.Duration) error {
 				key := keyPrefix + "." + data.objName
 				mapField := objValue.Field(data.structIndex)
-
-				var ttl time.Duration
-
-				for _, option := range options {
-					switch option.name {
-					case "ttl":
-						ttl = option.value.(time.Duration)
-					}
-				}
 
 				if mapField.Len() == 0 {
 					return nil
@@ -263,18 +245,9 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 				objName:     fieldType.Name,
 				structIndex: structFieldIndex,
 			}
-			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options ...Option) error {
+			data.redisWriteFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, ttl time.Duration) error {
 				key := keyPrefix
 				value := objValue.Field(data.structIndex).Interface()
-
-				var ttl time.Duration
-
-				for _, option := range options {
-					switch option.name {
-					case "ttl":
-						ttl = option.value.(time.Duration)
-					}
-				}
 
 				pipe.HSet(key, data.objName, value)
 
@@ -314,88 +287,93 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 	return objStructRef, nil
 }
 
-func (self objStruct) key(objValue reflect.Value) string {
-	key := self.structData.objName
+func (self objStruct) key(keyPrefix string, objValue reflect.Value) (string, error) {
+	key := keyPrefix + ":" + self.structData.objName
 
 	if self.keyFieldIndex != -1 {
 		keyValue, err := valueToString(objValue.Field(self.keyFieldIndex))
-		if err != nil || keyValue == "" {
+		if err != nil {
+			return "", err
+		}
+		if keyValue == "" {
 			keyValue = "none"
 		}
 
 		key += ":" + keyValue
 	}
 
-	return key
+	// This struct is the root or is keyed so utilize hash tags to co-locate the data on the same redis node.
+	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
+		key = "{" + key + "}"
+	}
+
+	return key, nil
 }
 
-func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Client, key string, objValue reflect.Value, ttl time.Duration, write bool) (bool, error) {
+func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Client, key string, objValue reflect.Value, write bool, options Options) (bool, error) {
+	if !options.EnableCaching {
+		// Caching is disabled.
+		return false, nil
+	}
+
+	// Cacheable struct are the root struct or are keyed.
+	if self.structData.structIndex != -1 && self.keyFieldIndex != -1 {
+		// Not an object to track with cache.
+		return false, nil
+	}
+
 	objHash, err := hashstructure.Hash(objValue.Interface(), hashstructure.FormatV2, nil)
 	if err != nil {
+		//fmt.Println("write", write, "hit", false)
 		return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
 	}
 	hashString := strconv.FormatUint(objHash, 10)
 
 	hashKey := key + ".__HASH__"
-
-	if !write {
-		ttl, err = redisClient.WithContext(ctx).TTL(hashKey).Result()
-		if err != nil {
-			return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
-		}
-	}
-
-	pipe := redisClient.WithContext(ctx).TxPipeline()
-	pipe.Get(hashKey)
+	var result *redis.Cmd
 	if write {
-		pipe.Set(hashKey, hashString, ttl)
+		// When writing, update the TTL to the desired value.
+		if options.Ttl == 0 {
+			result = redisClient.WithContext(ctx).Do("SET", hashKey, hashString, "GET")
+		} else {
+			result = redisClient.WithContext(ctx).Do("SET", hashKey, hashString, "EX", strconv.Itoa(int(options.Ttl.Seconds())), "GET")
+		}
+	} else {
+		// When reading, just get the hash key.
+		result = redisClient.WithContext(ctx).Do("GET", hashKey)
 	}
-	results, _ := pipe.Exec()
 
-	previousHash, err := results[0].(*redis.StringCmd).Result()
+	previousHash, err := result.Result()
 	if err != nil && err != redis.Nil {
+		//fmt.Println("write", write, "hit", false)
 		return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
 	}
-
-	if write {
-		status, err := results[1].(*redis.StatusCmd).Result()
-		if err != nil && err != redis.Nil {
-			return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
-		}
-		if status != "OK" {
-			return false, nil
-		}
+	if previousHash == nil {
+		//fmt.Println("write", write, "hit", false)
+		return false, nil
 	}
 
-	return hashString == previousHash, nil
+	cacheHit := hashString == previousHash.(string)
+
+	fmt.Println("write", write, "hit", cacheHit)
+
+	return cacheHit, nil
 }
 
-func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options ...Option) error {
-	key := keyPrefix + ":" + self.key(objValue)
-
-	// This struct is the root or is keyed so utilize hash tags to co-locate the data on the same redis node.
-	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
-		key = "{" + key + "}"
-
-		var ttl time.Duration
-
-		for _, option := range options {
-			switch option.name {
-			case "ttl":
-				ttl = option.value.(time.Duration)
-			}
-		}
-
-		if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, ttl, true); err != nil {
-			return err
-		} else if fresh {
-			// Do not write anything for this struct.
-			//fmt.Println("write cache hit")
-			return nil
-		}
-		//fmt.Println("write cache miss")
+func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options Options) error {
+	key, err := self.key(keyPrefix, objValue)
+	if err != nil {
+		return err
 	}
 
+	if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, true, options); err != nil {
+		return err
+	} else if fresh {
+		// Do not write anything for this struct.
+		return nil
+	}
+
+	// Delete the struct data. This is easier than trying to reconcile existing data in redis.
 	pipe.Del(key)
 
 	for _, structField := range self.structFields {
@@ -410,25 +388,25 @@ func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Clien
 			childKeyPrefix = key
 		}
 
-		if err := structField.writeToRedis(ctx, redisClient, pipe, childKeyPrefix, objStructValue, options...); err != nil {
+		if err := structField.writeToRedis(ctx, redisClient, pipe, childKeyPrefix, objStructValue, options); err != nil {
 			return err
 		}
 	}
 
 	for _, valueField := range self.valueFields {
-		if err := valueField.redisWriteFn(pipe, key, objValue, options...); err != nil {
+		if err := valueField.redisWriteFn(pipe, key, objValue, options.Ttl); err != nil {
 			return err
 		}
 	}
 
 	for _, sliceField := range self.sliceFields {
-		if err := sliceField.redisWriteFn(pipe, key, objValue, options...); err != nil {
+		if err := sliceField.redisWriteFn(pipe, key, objValue, options.Ttl); err != nil {
 			return err
 		}
 	}
 
 	for _, mapField := range self.mapFields {
-		if err := mapField.redisWriteFn(pipe, key, objValue, options...); err != nil {
+		if err := mapField.redisWriteFn(pipe, key, objValue, options.Ttl); err != nil {
 			return err
 		}
 	}
@@ -436,21 +414,17 @@ func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Clien
 	return nil
 }
 
-func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *[]readResultsCallback, keyPrefix string, objValue reflect.Value) error {
-	key := keyPrefix + ":" + self.key(objValue)
+func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *[]readResultsCallback, keyPrefix string, objValue reflect.Value, options Options) error {
+	key, err := self.key(keyPrefix, objValue)
+	if err != nil {
+		return err
+	}
 
-	// This struct is the root or is keyed so utilize hash tags to co-locate the data on the same redis node.
-	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
-		key = "{" + key + "}"
-
-		if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, 0, false); err != nil {
-			return err
-		} else if fresh {
-			// Do not read anything for this struct.
-			//fmt.Println("read cache hit")
-			return nil
-		}
-		//fmt.Println("read cache miss")
+	if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, false, options); err != nil {
+		return err
+	} else if fresh {
+		// Do not write anything for this struct.
+		return nil
 	}
 
 	for _, structField := range self.structFields {
@@ -465,7 +439,7 @@ func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Clie
 			childKeyPrefix = key
 		}
 
-		if err := structField.readFromRedis(ctx, redisClient, pipe, callbacks, childKeyPrefix, objStructValue); err != nil {
+		if err := structField.readFromRedis(ctx, redisClient, pipe, callbacks, childKeyPrefix, objStructValue, options); err != nil {
 			return err
 		}
 	}

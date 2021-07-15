@@ -45,7 +45,7 @@ func Test_Store(t *testing.T) {
 	testCases := []struct {
 		description          string
 		writeObject          value
-		options              []redisobj.Option
+		options              redisobj.Options
 		expectedReadObject   value
 		expectedFooTtl       time.Duration
 		expectedBarTtl       time.Duration
@@ -70,17 +70,20 @@ func Test_Store(t *testing.T) {
 					NestedInt:    15,
 				},
 			},
-			options: []redisobj.Option{},
+			options: redisobj.Options{
+				EnableCaching: true,
+				Ttl:           time.Minute,
+			},
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
 			var err error
 
-			err = objStore.Write(ctx, testCase.writeObject, testCase.options...)
+			err = objStore.Write(ctx, testCase.writeObject, testCase.options)
 			assert.Nil(t, err)
 
-			err = objStore.Write(ctx, testCase.writeObject, testCase.options...)
+			err = objStore.Write(ctx, testCase.writeObject, testCase.options)
 			assert.Nil(t, err)
 
 			{
@@ -90,9 +93,9 @@ func Test_Store(t *testing.T) {
 						NestedInt: 15,
 					},
 				}
-				err = objStore.Read(ctx, &readObject)
+				err = objStore.Read(ctx, &readObject, testCase.options)
 				assert.Nil(t, err)
-				err = objStore.Read(ctx, &readObject)
+				err = objStore.Read(ctx, &readObject, testCase.options)
 				assert.Nil(t, err)
 
 				fmt.Printf("%+v\n", readObject)
@@ -101,9 +104,9 @@ func Test_Store(t *testing.T) {
 				readObject := nested{
 					NestedInt: 15,
 				}
-				err = objStore.Read(ctx, &readObject)
+				err = objStore.Read(ctx, &readObject, testCase.options)
 				assert.Nil(t, err)
-				err = objStore.Read(ctx, &readObject)
+				err = objStore.Read(ctx, &readObject, testCase.options)
 				assert.Nil(t, err)
 
 				fmt.Printf("%+v\n", readObject)
@@ -111,7 +114,7 @@ func Test_Store(t *testing.T) {
 
 			{
 				readObject := nested{}
-				err = objStore.Read(ctx, &readObject)
+				err = objStore.Read(ctx, &readObject, testCase.options)
 				assert.ErrorIs(t, err, redisobj.ErrObjectNotFound)
 
 				fmt.Printf("%+v\n", readObject)
