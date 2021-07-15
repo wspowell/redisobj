@@ -390,10 +390,10 @@ func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Clien
 			return err
 		} else if fresh {
 			// Do not write anything for this struct.
-			fmt.Println("write cache hit")
+			//fmt.Println("write cache hit")
 			return nil
 		}
-		fmt.Println("write cache miss")
+		//fmt.Println("write cache miss")
 	}
 
 	pipe.Del(key)
@@ -447,10 +447,10 @@ func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Clie
 			return err
 		} else if fresh {
 			// Do not read anything for this struct.
-			fmt.Println("read cache hit")
+			//fmt.Println("read cache hit")
 			return nil
 		}
-		fmt.Println("read cache miss")
+		//fmt.Println("read cache miss")
 	}
 
 	for _, structField := range self.structFields {
