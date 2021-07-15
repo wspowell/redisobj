@@ -115,6 +115,11 @@ func (self *Store) Write(ctx context.Context, obj interface{}, options Options) 
 
 type readResultsCallback func(result redis.Cmder) error
 
+type callbackData struct {
+	callbacks []readResultsCallback
+	index     int
+}
+
 func (self *Store) Read(ctx context.Context, obj interface{}, options Options) error {
 	objStructRef, objValue, err := self.getObjectStruct(obj)
 	if err != nil {
@@ -125,8 +130,10 @@ func (self *Store) Read(ctx context.Context, obj interface{}, options Options) e
 	//        See: https://github.com/go-redis/redis/pull/1823
 	pipe := self.redisClient.WithContext(ctx).Pipeline()
 
-	callbacks := []readResultsCallback{}
-	if err := objStructRef.readFromRedis(ctx, self.redisClient, pipe, &callbacks, rootKeyPrefix, objValue, options); err != nil {
+	callbackData := &callbackData{
+		callbacks: make([]readResultsCallback, objStructRef.fieldCount),
+	}
+	if err := objStructRef.readFromRedis(ctx, self.redisClient, pipe, callbackData, rootKeyPrefix, objValue, options); err != nil {
 		return err
 	}
 
@@ -137,7 +144,7 @@ func (self *Store) Read(ctx context.Context, obj interface{}, options Options) e
 			return fmt.Errorf("%w: %s", ErrRedisCommandError, err)
 		}
 
-		if err := callbacks[index](result); err != nil {
+		if err := callbackData.callbacks[index](result); err != nil {
 			return err
 		}
 	}

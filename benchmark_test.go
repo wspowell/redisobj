@@ -80,7 +80,7 @@ func Benchmark_redisobj_read_keyedObject(b *testing.B) {
 		Id:    id,
 		Value: "value",
 	}
-	if err = objStore.Write(ctx, input, redisobj.Options{}); err != nil {
+	if err = objStore.Write(ctx, input, redisobj.Options{EnableCaching: true}); err != nil {
 		panic(err)
 	}
 
@@ -91,7 +91,7 @@ func Benchmark_redisobj_read_keyedObject(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err = objStore.Read(ctx, output, redisobj.Options{}); err != nil {
+		if err = objStore.Read(ctx, output, redisobj.Options{EnableCaching: true}); err != nil {
 			panic(err)
 		}
 	}
@@ -100,62 +100,70 @@ func Benchmark_redisobj_read_keyedObject(b *testing.B) {
 func Benchmark_redis_read_keyedObject(b *testing.B) {
 	redisClient := NewGoRedisClient()
 	redisClient.FlushAll()
+	ctx := context.Background()
 	var err error
 
 	key := uuid.New().String()
-	if err = redisClient.Set("redisobj:keyedObject:"+key, "value", 0).Err(); err != nil {
+	if err = redisClient.HSet("redisobj:keyedObject:"+key, "Id", key, "Value", "value").Err(); err != nil {
 		panic(err)
 	}
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err = redisClient.Get("redisobj:keyedObject:" + key).Err(); err != nil {
+		pipe := redisClient.WithContext(ctx).Pipeline()
+
+		pipe.HMGet("redisobj:keyedObject:"+key, "Id")
+		pipe.HMGet("redisobj:keyedObject:"+key, "Value")
+
+		if _, err := pipe.Exec(); err != nil {
 			panic(err)
 		}
 	}
 }
 
-// func Benchmark_redisobj_write_singleVariableRedisValue(b *testing.B) {
-// 	redisClient := NewGoRedisClient()
-// 	redisClient.FlushAll()
-// 	var err error
+func Benchmark_redisobj_write_singleVariableSingleton(b *testing.B) {
+	redisClient := NewGoRedisClient()
+	redisClient.FlushAll()
+	ctx := context.Background()
 
-// 	objStore := redisobj.NewStore(redisClient)
+	var err error
 
-// 	input := singleVariableRedisValue{
-// 		Value: uuid.New().String(),
-// 	}
+	objStore := redisobj.NewStore(redisClient)
 
-// 	// Perform one write to ensure all reflection has been setup.
-// 	if err = objStore.Write(input); err != nil {
-// 		panic(err)
-// 	}
+	input := singleVariableSingleton{
+		Value: uuid.New().String(),
+	}
 
-// 	b.ResetTimer()
+	// Perform one write to ensure all reflection has been setup.
+	if err = objStore.Write(ctx, input, redisobj.Options{}); err != nil {
+		panic(err)
+	}
 
-// 	for i := 0; i < b.N; i++ {
-// 		if err = objStore.Write(input); err != nil {
-// 			panic(err)
-// 		}
-// 	}
-// }
+	b.ResetTimer()
 
-// func Benchmark_redis_write_singleVariableRedisValue(b *testing.B) {
-// 	redisClient := NewGoRedisClient()
-// 	redisClient.FlushAll()
-// 	var err error
+	for i := 0; i < b.N; i++ {
+		if err = objStore.Write(ctx, input, redisobj.Options{}); err != nil {
+			panic(err)
+		}
+	}
+}
 
-// 	value := uuid.New().String()
+func Benchmark_redis_write_singleVariableRedisValue(b *testing.B) {
+	redisClient := NewGoRedisClient()
+	redisClient.FlushAll()
+	var err error
 
-// 	b.ResetTimer()
+	value := uuid.New().String()
 
-// 	for i := 0; i < b.N; i++ {
-// 		if err = redisClient.Set("redisobj:singleVariableRedisValue:value", value, 0).Err(); err != nil {
-// 			panic(err)
-// 		}
-// 	}
-// }
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err = redisClient.Set("redisobj:singleVariableRedisValue:value", value, 0).Err(); err != nil {
+			panic(err)
+		}
+	}
+}
 
 // type singleVariableRedisHash struct {
 // 	Hash map[string]interface{} `redisHash:"hash"`

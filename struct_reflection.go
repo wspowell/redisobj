@@ -35,6 +35,7 @@ type objStruct struct {
 	sliceFields   []*reflectionData
 	mapFields     []*reflectionData
 	structFields  []*objStruct
+	fieldCount    int
 }
 
 func newObjStruct(obj interface{}) (*objStruct, error) {
@@ -56,6 +57,7 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 		sliceFields:   []*reflectionData{},
 		mapFields:     []*reflectionData{},
 		structFields:  []*objStruct{},
+		fieldCount:    0,
 	}
 
 	// Iterate over all available fields and read the tag value
@@ -72,6 +74,8 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 			structField.structData.structIndex = structFieldIndex
 			objStructRef.structFields = append(objStructRef.structFields, structField)
+
+			objStructRef.fieldCount += structField.fieldCount
 
 		case reflect.Slice:
 			// TODO: This could probably support struct values with a bit more effort.
@@ -117,7 +121,6 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 			data.redisReadFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value) readResultsCallback {
 				key := keyPrefix + "." + data.objName
-				sliceField := objValue.Field(data.structIndex)
 
 				pipe.ZRange(key, 0, -1)
 
@@ -125,12 +128,13 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 					redisValue, err := result.(*redis.StringSliceCmd).Result()
 					if err != nil {
 						if err == redis.Nil {
-							redisValue = []string{}
+							redisValue = nil
 						} else {
 							return fmt.Errorf("%w Get: %s", ErrRedisCommandError, err)
 						}
 					}
 
+					sliceField := objValue.Field(data.structIndex)
 					sliceField.Set(reflect.MakeSlice(data.objType, len(redisValue), len(redisValue)))
 					for index, readValue := range redisValue {
 						value := reflect.New(data.objType.Elem()).Elem()
@@ -147,6 +151,7 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 
 			objStructRef.sliceFields = append(objStructRef.sliceFields, data)
+			objStructRef.fieldCount++
 
 		case reflect.Map:
 			if !isStringParsable(fieldType.Type.Key()) {
@@ -206,7 +211,7 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 					redisValue, err := result.(*redis.StringStringMapCmd).Result()
 					if err != nil {
 						if err == redis.Nil {
-							redisValue = map[string]string{}
+							redisValue = nil
 						} else {
 							return fmt.Errorf("%w Get: %s", ErrRedisCommandError, err)
 						}
@@ -234,6 +239,7 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 
 			objStructRef.mapFields = append(objStructRef.mapFields, data)
+			objStructRef.fieldCount++
 		default:
 			if tagValue, exists := fieldType.Tag.Lookup(structTagKeyRedisobj); exists {
 				if strings.EqualFold(tagValue, structTagValueKey) {
@@ -282,6 +288,7 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 
 			objStructRef.valueFields = append(objStructRef.valueFields, data)
+			objStructRef.fieldCount++
 		}
 	}
 
@@ -410,7 +417,7 @@ func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Clien
 	return nil
 }
 
-func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *[]readResultsCallback, keyPrefix string, objValue reflect.Value, options Options) error {
+func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *callbackData, keyPrefix string, objValue reflect.Value, options Options) error {
 	key, err := self.key(keyPrefix, objValue)
 	if err != nil {
 		return err
@@ -442,17 +449,20 @@ func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Clie
 
 	for _, valueField := range self.valueFields {
 		callback := valueField.redisReadFn(pipe, key, objValue)
-		*callbacks = append(*callbacks, callback)
+		callbacks.callbacks[callbacks.index] = callback
+		callbacks.index++
 	}
 
 	for _, sliceField := range self.sliceFields {
 		callback := sliceField.redisReadFn(pipe, key, objValue)
-		*callbacks = append(*callbacks, callback)
+		callbacks.callbacks[callbacks.index] = callback
+		callbacks.index++
 	}
 
 	for _, mapField := range self.mapFields {
 		callback := mapField.redisReadFn(pipe, key, objValue)
-		*callbacks = append(*callbacks, callback)
+		callbacks.callbacks[callbacks.index] = callback
+		callbacks.index++
 	}
 
 	return nil
