@@ -199,8 +199,6 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 			}
 			data.redisReadFn = func(pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value) readResultsCallback {
 				key := keyPrefix + "." + data.objName
-				mapField := objValue.Field(data.structIndex)
-				mapField.Set(reflect.MakeMap(data.objType))
 
 				pipe.HGetAll(key)
 
@@ -213,6 +211,9 @@ func newObjStruct(obj interface{}) (*objStruct, error) {
 							return fmt.Errorf("%w Get: %s", ErrRedisCommandError, err)
 						}
 					}
+
+					mapField := objValue.Field(data.structIndex)
+					mapField.Set(reflect.MakeMap(data.objType))
 
 					for readKey, readValue := range redisValue {
 						keyValue := reflect.New(data.objType.Key()).Elem()
@@ -324,7 +325,6 @@ func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Clien
 
 	objHash, err := hashstructure.Hash(objValue.Interface(), hashstructure.FormatV2, nil)
 	if err != nil {
-		//fmt.Println("write", write, "hit", false)
 		return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
 	}
 	hashString := strconv.FormatUint(objHash, 10)
@@ -345,17 +345,13 @@ func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Clien
 
 	previousHash, err := result.Result()
 	if err != nil && err != redis.Nil {
-		//fmt.Println("write", write, "hit", false)
 		return false, fmt.Errorf("%w: %s", ErrCacheFailure, err)
 	}
 	if previousHash == nil {
-		//fmt.Println("write", write, "hit", false)
 		return false, nil
 	}
 
 	cacheHit := hashString == previousHash.(string)
-
-	fmt.Println("write", write, "hit", cacheHit)
 
 	return cacheHit, nil
 }

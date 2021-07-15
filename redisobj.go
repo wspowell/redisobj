@@ -95,6 +95,8 @@ func (self *Store) Write(ctx context.Context, obj interface{}, options Options) 
 		return nil
 	}
 
+	// FIXME: This should be TxPipeline but there is a bug in go-redis/v7
+	//        See: https://github.com/go-redis/redis/pull/1823
 	pipe := self.redisClient.WithContext(ctx).Pipeline()
 
 	if err = objStructRef.writeToRedis(ctx, self.redisClient, pipe, rootKeyPrefix, objValue, options); err != nil {
@@ -119,6 +121,8 @@ func (self *Store) Read(ctx context.Context, obj interface{}, options Options) e
 		return nil
 	}
 
+	// FIXME: This should be TxPipeline but there is a bug in go-redis/v7
+	//        See: https://github.com/go-redis/redis/pull/1823
 	pipe := self.redisClient.WithContext(ctx).Pipeline()
 
 	callbacks := []readResultsCallback{}
@@ -127,12 +131,12 @@ func (self *Store) Read(ctx context.Context, obj interface{}, options Options) e
 	}
 
 	results, _ := pipe.Exec()
+
 	for index, result := range results {
 		if err := result.Err(); err != nil && err != redis.Nil {
 			return fmt.Errorf("%w: %s", ErrRedisCommandError, err)
 		}
 
-		// index-1 due to TX pipeline.
 		if err := callbacks[index](result); err != nil {
 			return err
 		}

@@ -24,7 +24,9 @@ func Benchmark_redisobj_read_singleVariableSingleton(b *testing.B) {
 	input := singleVariableSingleton{
 		Value: uuid.New().String(),
 	}
-	if err = objStore.Write(ctx, input, redisobj.Options{}); err != nil {
+	if err = objStore.Write(ctx, input, redisobj.Options{
+		EnableCaching: true,
+	}); err != nil {
 		panic(err)
 	}
 
@@ -33,7 +35,9 @@ func Benchmark_redisobj_read_singleVariableSingleton(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err = objStore.Read(ctx, output, redisobj.Options{}); err != nil {
+		if err = objStore.Read(ctx, output, redisobj.Options{
+			EnableCaching: true,
+		}); err != nil {
 			panic(err)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"redisobj"
+	"strconv"
 	"testing"
 	"time"
 
@@ -22,6 +23,38 @@ var (
 	ttlInfinite  = time.Duration(-1)
 	ttlNotExists = time.Duration(-2)
 )
+
+func Test_redis(t *testing.T) {
+	redisClient := NewGoRedisClient()
+	redisClient.FlushAll()
+
+	ctx := context.Background()
+
+	numKeys := 5
+	for i := 0; i < numKeys; i++ {
+		redisClient.WithContext(ctx).Set("key-"+strconv.Itoa(i), i, 0)
+		fmt.Println(i, "set", i)
+	}
+
+	pipe := redisClient.WithContext(ctx).TxPipeline()
+
+	for i := 0; i < numKeys; i++ {
+		pipe.Get("key-" + strconv.Itoa(i))
+	}
+
+	results, err := pipe.Exec()
+
+	assert.Nil(t, err)
+
+	for index := range results {
+		if results[index].Name() == "multi" {
+			continue
+		}
+		fmt.Println(index, results[index].Name(), results[index].(*redis.StringCmd).Val())
+	}
+
+	t.Fail()
+}
 
 func Test_Store(t *testing.T) {
 	redisClient := NewGoRedisClient()
