@@ -1,6 +1,7 @@
 package redisobj_test
 
 import (
+	"context"
 	"fmt"
 	"redisobj"
 	"testing"
@@ -25,6 +26,7 @@ var (
 func Test_Store(t *testing.T) {
 	redisClient := NewGoRedisClient()
 	redisClient.FlushAll()
+	ctx := context.Background()
 
 	type nested struct {
 		NestedString string
@@ -34,6 +36,7 @@ func Test_Store(t *testing.T) {
 		Foo    string `redisobj:"key"`
 		Bar    int
 		Har    map[int]int
+		Lar    []string
 		Nested nested
 	}
 
@@ -57,6 +60,11 @@ func Test_Store(t *testing.T) {
 				Har: map[int]int{
 					111: 222,
 				},
+				Lar: []string{
+					"one",
+					"two",
+					"three",
+				},
 				Nested: nested{
 					NestedString: "nested_foo",
 					NestedInt:    15,
@@ -69,7 +77,10 @@ func Test_Store(t *testing.T) {
 		t.Run(testCase.description, func(t *testing.T) {
 			var err error
 
-			err = objStore.Write(testCase.writeObject, testCase.options...)
+			err = objStore.Write(ctx, testCase.writeObject, testCase.options...)
+			assert.Nil(t, err)
+
+			err = objStore.Write(ctx, testCase.writeObject, testCase.options...)
 			assert.Nil(t, err)
 
 			{
@@ -79,7 +90,9 @@ func Test_Store(t *testing.T) {
 						NestedInt: 15,
 					},
 				}
-				err = objStore.Read(&readObject)
+				err = objStore.Read(ctx, &readObject)
+				assert.Nil(t, err)
+				err = objStore.Read(ctx, &readObject)
 				assert.Nil(t, err)
 
 				fmt.Printf("%+v\n", readObject)
@@ -88,7 +101,9 @@ func Test_Store(t *testing.T) {
 				readObject := nested{
 					NestedInt: 15,
 				}
-				err = objStore.Read(&readObject)
+				err = objStore.Read(ctx, &readObject)
+				assert.Nil(t, err)
+				err = objStore.Read(ctx, &readObject)
 				assert.Nil(t, err)
 
 				fmt.Printf("%+v\n", readObject)
@@ -96,7 +111,7 @@ func Test_Store(t *testing.T) {
 
 			{
 				readObject := nested{}
-				err = objStore.Read(&readObject)
+				err = objStore.Read(ctx, &readObject)
 				assert.ErrorIs(t, err, redisobj.ErrObjectNotFound)
 
 				fmt.Printf("%+v\n", readObject)
