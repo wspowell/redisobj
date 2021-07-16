@@ -325,7 +325,7 @@ func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Clien
 	}
 
 	// Cacheable struct are the root struct or are keyed.
-	if self.structData.structIndex != -1 && self.keyFieldIndex != -1 {
+	if self.structData.structIndex != -1 && self.keyFieldIndex == -1 {
 		// Not an object to track with cache.
 		return false, nil
 	}
@@ -363,11 +363,19 @@ func (self objStruct) isCacheFresh(ctx context.Context, redisClient *redis.Clien
 	return cacheHit, nil
 }
 
+func (self objStruct) writeExistence(pipe redis.Pipeliner, key string, ttl time.Duration) {
+	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
+		pipe.Set(key+".__EXISTS__", "1", ttl)
+	}
+}
+
 func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, keyPrefix string, objValue reflect.Value, options Options) error {
 	key, err := self.key(keyPrefix, objValue)
 	if err != nil {
 		return err
 	}
+
+	self.writeExistence(pipe, key, options.Ttl)
 
 	if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, true, options); err != nil {
 		return err
@@ -417,11 +425,30 @@ func (self objStruct) writeToRedis(ctx context.Context, redisClient *redis.Clien
 	return nil
 }
 
-func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *callbackData, keyPrefix string, objValue reflect.Value, options Options) error {
+func (self objStruct) readExistence(pipe redis.Pipeliner, key string, callbacks *[]readResultsCallback) {
+	if self.structData.structIndex == -1 || self.keyFieldIndex != -1 {
+		pipe.Exists(key + ".__EXISTS__")
+
+		*callbacks = append(*callbacks, func(result redis.Cmder) error {
+			exists, err := result.(*redis.IntCmd).Result()
+			if err != nil {
+				return fmt.Errorf("%w: %s", ErrRedisCommandError, err)
+			}
+			if exists == 0 {
+				return ErrObjectNotFound
+			}
+			return nil
+		})
+	}
+}
+
+func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Client, pipe redis.Pipeliner, callbacks *[]readResultsCallback, keyPrefix string, objValue reflect.Value, options Options) error {
 	key, err := self.key(keyPrefix, objValue)
 	if err != nil {
 		return err
 	}
+
+	self.readExistence(pipe, key, callbacks)
 
 	if fresh, err := self.isCacheFresh(ctx, redisClient, key, objValue, false, options); err != nil {
 		return err
@@ -449,20 +476,17 @@ func (self objStruct) readFromRedis(ctx context.Context, redisClient *redis.Clie
 
 	for _, valueField := range self.valueFields {
 		callback := valueField.redisReadFn(pipe, key, objValue)
-		callbacks.callbacks[callbacks.index] = callback
-		callbacks.index++
+		*callbacks = append(*callbacks, callback)
 	}
 
 	for _, sliceField := range self.sliceFields {
 		callback := sliceField.redisReadFn(pipe, key, objValue)
-		callbacks.callbacks[callbacks.index] = callback
-		callbacks.index++
+		*callbacks = append(*callbacks, callback)
 	}
 
 	for _, mapField := range self.mapFields {
 		callback := mapField.redisReadFn(pipe, key, objValue)
-		callbacks.callbacks[callbacks.index] = callback
-		callbacks.index++
+		*callbacks = append(*callbacks, callback)
 	}
 
 	return nil

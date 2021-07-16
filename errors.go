@@ -6,8 +6,9 @@ import (
 
 var (
 	ErrInvalidRedisDefinition = errors.New("provided redis defintion is not valid")
+	ErrInvalidObject          = errors.New("invalid object")
 	ErrInvalidFieldType       = errors.New("invalid field type")
-	ErrRedisCommandError      = errors.New("failed executing redis command")
 	ErrObjectNotFound         = errors.New("object not found")
+	ErrRedisCommandError      = errors.New("failed executing redis command")
 	ErrCacheFailure           = errors.New("failure checking redis object cache")
 )

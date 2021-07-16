@@ -171,4 +171,30 @@ err := objStore.Read(&group)
 ```
 
 # Benchmarks
-TODO Show how redisobj compares to redis commands.
+redisobj does more for you than straight up redis commands. Therefore, it is no surprise that redisobj is slower than its redis counterpart. However, there are some aspects the golang benchmarks are not able to show:
+* Cost of developer time to implement redis calls
+* With caching enabled: Potential for reduced cost in data transfer 
+* With caching enabled: Potential for reduced load on redis, allowing the same hardware to server more processes
+
+In order to determine if there are worthwhile savings, more suitable load tests should be preformed.
+
+```
+goos: linux
+goarch: amd64
+pkg: redisobj
+cpu: AMD Ryzen 9 4900HS with Radeon Graphics         
+Benchmark_redisobj_read_singleVariableSingleton-8      	   10000	    129657 ns/op	     792 B/op	      24 allocs/op
+Benchmark_redis_read_singleVariableSingleton-8         	    9634	    113785 ns/op	     160 B/op	       4 allocs/op
+Benchmark_redisobj_write_singleVariableSingleton-8     	   10000	    140053 ns/op	     946 B/op	      26 allocs/op
+Benchmark_redis_write_singleVariableSingleton-8        	    8962	    125338 ns/op	     242 B/op	       7 allocs/op
+Benchmark_redisobj_read_keyedObject-8                  	   10000	    112966 ns/op	    1224 B/op	      35 allocs/op
+Benchmark_redis_read_keyedObject-8                     	   10000	    123497 ns/op	     872 B/op	      26 allocs/op
+Benchmark_redisobj_write_keyedObject-8                 	    9116	    118030 ns/op	    1258 B/op	      32 allocs/op
+Benchmark_redis_write_keyedObject-8                    	    9841	    118951 ns/op	     256 B/op	       5 allocs/op
+Benchmark_redisobj_read_keyedObject_nested-8           	    9272	    169151 ns/op	    4784 B/op	     123 allocs/op
+Benchmark_redisobj_read_keyedObject_nested_cached-8    	    6391	    262586 ns/op	    3032 B/op	     201 allocs/op
+Benchmark_redis_read_keyedObject_nested-8              	    7826	    153248 ns/op	    2752 B/op	      60 allocs/op
+Benchmark_redisobj_write_keyedObject_nested-8          	    7069	    146746 ns/op	    5304 B/op	     139 allocs/op
+Benchmark_redisobj_write_keyedObject_nested_cached-8   	    4296	    260630 ns/op	    3104 B/op	     201 allocs/op
+Benchmark_redis_write_keyedObject_nested-8             	    7784	    142254 ns/op	    1616 B/op	      36 allocs/op
+```

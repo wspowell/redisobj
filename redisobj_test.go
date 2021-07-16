@@ -2,9 +2,7 @@ package redisobj_test
 
 import (
 	"context"
-	"fmt"
 	"redisobj"
-	"strconv"
 	"testing"
 	"time"
 
@@ -24,551 +22,403 @@ var (
 	ttlNotExists = time.Duration(-2)
 )
 
-func Test_redis(t *testing.T) {
-	redisClient := NewGoRedisClient()
-	redisClient.FlushAll()
-
-	ctx := context.Background()
-
-	numKeys := 5
-	for i := 0; i < numKeys; i++ {
-		redisClient.WithContext(ctx).Set("key-"+strconv.Itoa(i), i, 0)
-		fmt.Println(i, "set", i)
-	}
-
-	pipe := redisClient.WithContext(ctx).TxPipeline()
-
-	for i := 0; i < numKeys; i++ {
-		pipe.Get("key-" + strconv.Itoa(i))
-	}
-
-	results, err := pipe.Exec()
-
-	assert.Nil(t, err)
-
-	for index := range results {
-		if results[index].Name() == "multi" {
-			continue
-		}
-		fmt.Println(index, results[index].Name(), results[index].(*redis.StringCmd).Val())
-	}
-
-	t.Fail()
-}
-
-func Test_Store(t *testing.T) {
+func Test_Store_singleton(t *testing.T) {
 	redisClient := NewGoRedisClient()
 	redisClient.FlushAll()
 	ctx := context.Background()
 
 	type nested struct {
 		NestedString string
-		NestedInt    int `redisobj:"key"`
+		NestedInt    int
+		NestedMap    map[int]int
+		NestedSlice  []string
 	}
-	type value struct {
-		Foo    string `redisobj:"key"`
-		Bar    int
-		Har    map[int]int
-		Lar    []string
+	type root struct {
+		String string
+		Int    int
+		Map    map[int]int
+		Slice  []string
 		Nested nested
 	}
 
 	objStore := redisobj.NewStore(redisClient)
 
+	testObject := &root{
+		String: "root_string",
+		Int:    5,
+		Map: map[int]int{
+			111: 222,
+		},
+		Slice: []string{
+			"one",
+			"two",
+			"three",
+		},
+		Nested: nested{
+			NestedString: "nested_string",
+			NestedInt:    13,
+			NestedMap: map[int]int{
+				333: 444,
+			},
+			NestedSlice: []string{
+				"four",
+				"five",
+				"six",
+			},
+		},
+	}
+
+	actualObject := &root{}
+
 	testCases := []struct {
-		description          string
-		writeObject          value
-		options              redisobj.Options
-		expectedReadObject   value
-		expectedFooTtl       time.Duration
-		expectedBarTtl       time.Duration
-		expectedNestedFooTtl time.Duration
-		expectedNestedBarTtl time.Duration
+		description    string
+		object         *root
+		options        redisobj.Options
+		expectedObject *root
+		expectedTtl    time.Duration
+		expectedError  error
 	}{
 		{
-			description: "",
-			writeObject: value{
-				Foo: "my_foo",
-				Bar: 5,
-				Har: map[int]int{
-					111: 222,
-				},
-				Lar: []string{
-					"one",
-					"two",
-					"three",
-				},
-				Nested: nested{
-					NestedString: "nested_foo",
-					NestedInt:    15,
-				},
+			description:    "object does not exist",
+			object:         nil,
+			options:        redisobj.Options{},
+			expectedObject: &root{},
+			expectedTtl:    ttlNotExists,
+			expectedError:  redisobj.ErrObjectNotFound,
+		},
+		{
+			description: "writes and reads object successfully",
+			object:      testObject,
+			options: redisobj.Options{
+				Ttl: time.Minute,
 			},
+			expectedObject: testObject,
+			expectedTtl:    time.Minute,
+			expectedError:  nil,
+		},
+		{
+			description: "writes and reads object successfully - object cached",
+			object:      testObject,
 			options: redisobj.Options{
 				EnableCaching: true,
-				Ttl:           time.Minute,
 			},
+			expectedObject: testObject,
+			expectedTtl:    ttlInfinite,
+			expectedError:  nil,
+		},
+		{
+			description:    "writes and reads object successfully - no ttl",
+			object:         testObject,
+			options:        redisobj.Options{},
+			expectedObject: testObject,
+			expectedTtl:    ttlInfinite,
+			expectedError:  nil,
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
 			var err error
 
-			err = objStore.Write(ctx, testCase.writeObject, testCase.options)
+			err = objStore.Write(ctx, testCase.object, testCase.options)
+			if testCase.object == nil {
+				assert.ErrorIs(t, err, redisobj.ErrInvalidObject)
+			} else {
+				assert.Nil(t, err)
+			}
+
+			err = objStore.Read(ctx, actualObject, testCase.options)
+			assert.ErrorIs(t, err, testCase.expectedError)
+			assert.Equal(t, testCase.expectedObject, actualObject)
+
+			var actualTtl time.Duration
+
+			actualTtl, err = redisClient.TTL("{redisobj:root}").Result()
 			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-			err = objStore.Write(ctx, testCase.writeObject, testCase.options)
+			actualTtl, err = redisClient.TTL("{redisobj:root}.__EXISTS__").Result()
 			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-			{
-				readObject := value{
-					Foo: "my_foo",
-					Nested: nested{
-						NestedInt: 15,
-					},
-				}
-				err = objStore.Read(ctx, &readObject, testCase.options)
+			if testCase.options.EnableCaching {
+				actualTtl, err = redisClient.TTL("{redisobj:root}.__HASH__").Result()
 				assert.Nil(t, err)
-				err = objStore.Read(ctx, &readObject, testCase.options)
-				assert.Nil(t, err)
-
-				fmt.Printf("%+v\n", readObject)
-			}
-			{
-				readObject := nested{
-					NestedInt: 15,
-				}
-				err = objStore.Read(ctx, &readObject, testCase.options)
-				assert.Nil(t, err)
-				err = objStore.Read(ctx, &readObject, testCase.options)
-				assert.Nil(t, err)
-
-				fmt.Printf("%+v\n", readObject)
+				assert.Equal(t, testCase.expectedTtl, actualTtl)
 			}
 
-			{
-				readObject := nested{}
-				err = objStore.Read(ctx, &readObject, testCase.options)
-				assert.ErrorIs(t, err, redisobj.ErrObjectNotFound)
+			actualTtl, err = redisClient.TTL("{redisobj:root}.Map").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-				fmt.Printf("%+v\n", readObject)
-			}
-			t.Fail()
+			actualTtl, err = redisClient.TTL("{redisobj:root}.Slice").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 		})
 	}
 }
 
-// func Test_Store_Value(t *testing.T) {
-// 	redisClient := NewGoRedisClient()
-// 	redisClient.FlushAll()
+func Test_Store_keyed_object(t *testing.T) {
+	redisClient := NewGoRedisClient()
+	redisClient.FlushAll()
+	ctx := context.Background()
 
-// 	type nested struct {
-// 		NestedString string
-// 		NestedInt    int `redisobj:"key"`
-// 	}
-// 	type value struct {
-// 		Foo    string `redisobj:"key"`
-// 		Bar    int
-// 		Nested nested
-// 	}
+	type nested struct {
+		NestedString string
+		NestedInt    int
+		NestedMap    map[int]int
+		NestedSlice  []string
+	}
+	type root struct {
+		Id     string `redisobj:"key"`
+		String string
+		Int    int
+		Map    map[int]int
+		Slice  []string
+		Nested nested
+	}
 
-// 	objStore := redisobj.NewStore(redisClient)
+	objStore := redisobj.NewStore(redisClient)
 
-// 	testCases := []struct {
-// 		description          string
-// 		writeObject          value
-// 		options              []redisobj.Option
-// 		expectedReadObject   value
-// 		expectedFooTtl       time.Duration
-// 		expectedBarTtl       time.Duration
-// 		expectedNestedFooTtl time.Duration
-// 		expectedNestedBarTtl time.Duration
-// 	}{
-// 		{
-// 			description: "option if exists",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionIfExists,
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "",
-// 				Bar: 0,
-// 				Nested: nested{
-// 					NestedString: "",
-// 					NestedInt:    0,
-// 				},
-// 			},
-// 			expectedFooTtl:       ttlNotExists,
-// 			expectedBarTtl:       ttlNotExists,
-// 			expectedNestedFooTtl: ttlNotExists,
-// 			expectedNestedBarTtl: ttlNotExists,
-// 		},
-// 		{
-// 			description: "write/read object that does not exist in redis",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedFooTtl:       ttlInfinite,
-// 			expectedBarTtl:       ttlInfinite,
-// 			expectedNestedFooTtl: ttlInfinite,
-// 			expectedNestedBarTtl: ttlInfinite,
-// 		},
-// 		{
-// 			description: "write/read object that already exists in redis",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedFooTtl:       ttlInfinite,
-// 			expectedBarTtl:       ttlInfinite,
-// 			expectedNestedFooTtl: ttlInfinite,
-// 			expectedNestedBarTtl: ttlInfinite,
-// 		},
-// 		{
-// 			description: "option set ttl",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionTtl(10 * time.Minute),
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedFooTtl:       10 * time.Minute,
-// 			expectedBarTtl:       10 * time.Minute,
-// 			expectedNestedFooTtl: 10 * time.Minute,
-// 			expectedNestedBarTtl: 10 * time.Minute,
-// 		},
-// 		{
-// 			description: "option if not exists (already exists so write should not occur)",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 999,
-// 				Nested: nested{
-// 					NestedString: "OVERRIDE",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionIfNotExists,
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedFooTtl:       10 * time.Minute,
-// 			expectedBarTtl:       10 * time.Minute,
-// 			expectedNestedFooTtl: 10 * time.Minute,
-// 			expectedNestedBarTtl: 10 * time.Minute,
-// 		},
-// 	}
-// 	for _, testCase := range testCases {
-// 		t.Run(testCase.description, func(t *testing.T) {
-// 			var err error
+	actualObject := &root{}
 
-// 			err = objStore.Write(testCase.writeObject, testCase.options...)
-// 			assert.Nil(t, err)
+	testCases := []struct {
+		description    string
+		object         *root
+		options        redisobj.Options
+		expectedObject *root
+		expectedTtl    time.Duration
+		expectedError  error
+	}{
+		{
+			description:    "object does not exist - no key value",
+			object:         nil,
+			options:        redisobj.Options{},
+			expectedObject: &root{},
+			expectedTtl:    ttlNotExists,
+			expectedError:  redisobj.ErrObjectNotFound,
+		},
+		{
+			description: "object does not exist",
+			object:      nil,
+			options:     redisobj.Options{},
+			expectedObject: &root{
+				Id: "UUID",
+			},
+			expectedTtl:   ttlNotExists,
+			expectedError: redisobj.ErrObjectNotFound,
+		},
+		{
+			description: "writes and reads object successfully",
+			object: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			options: redisobj.Options{
+				Ttl: time.Minute,
+			},
+			expectedObject: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			expectedTtl:   time.Minute,
+			expectedError: nil,
+		},
+		{
+			description: "writes and reads object successfully - object cached",
+			object: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			options: redisobj.Options{
+				EnableCaching: true,
+			},
+			expectedObject: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			expectedTtl:   ttlInfinite,
+			expectedError: nil,
+		},
+		{
+			description: "writes and reads object successfully - no ttl",
+			object: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			options: redisobj.Options{},
+			expectedObject: &root{
+				Id:     "UUID",
+				String: "root_string",
+				Int:    5,
+				Map: map[int]int{
+					111: 222,
+				},
+				Slice: []string{
+					"one",
+					"two",
+					"three",
+				},
+				Nested: nested{
+					NestedString: "nested_string",
+					NestedInt:    13,
+					NestedMap: map[int]int{
+						333: 444,
+					},
+					NestedSlice: []string{
+						"four",
+						"five",
+						"six",
+					},
+				},
+			},
+			expectedTtl:   ttlInfinite,
+			expectedError: nil,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			var err error
 
-// 			readObject := value{
-// 				Foo: testCase.expectedReadObject.Foo,
-// 				Nested: nested{
-// 					NestedInt: testCase.expectedReadObject.Nested.NestedInt,
-// 				},
-// 			}
-// 			err = objStore.Read(&readObject)
-// 			assert.Nil(t, err)
+			err = objStore.Write(ctx, testCase.object, testCase.options)
+			if testCase.object == nil {
+				assert.ErrorIs(t, err, redisobj.ErrInvalidObject)
+			} else {
+				assert.Nil(t, err)
+			}
 
-// 			assert.Equal(t, testCase.expectedReadObject, readObject)
+			actualObject.Id = testCase.expectedObject.Id
+			err = objStore.Read(ctx, actualObject, testCase.options)
+			assert.ErrorIs(t, err, testCase.expectedError)
+			assert.Equal(t, testCase.expectedObject, actualObject)
 
-// 			actualTtl, err := redisClient.TTL("redisobj:value:my_foo:foo").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedFooTtl, actualTtl)
-// 			actualTtl, err = redisClient.TTL("redisobj:value:my_foo:bar").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedBarTtl, actualTtl)
-// 			actualTtl, err = redisClient.TTL("redisobj:value:my_foo:nested:15:foo").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedNestedFooTtl, actualTtl)
-// 			actualTtl, err = redisClient.TTL("redisobj:value:my_foo:nested:15:bar").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedNestedBarTtl, actualTtl)
-// 		})
-// 	}
-// }
+			var actualTtl time.Duration
 
-// func Test_Store_Hash(t *testing.T) {
-// 	redisClient := NewGoRedisClient()
-// 	redisClient.FlushAll()
+			actualTtl, err = redisClient.TTL("{redisobj:root:UUID}").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-// 	type nested struct {
-// 		NestedString string `redisHash:"foo"`
-// 		NestedInt    int    `redisHash:"bar,key"`
-// 	}
-// 	type value struct {
-// 		Foo    string      `redisHash:"foo,key"`
-// 		Bar    int         `redisHash:"bar"`
-// 		Har    map[int]int `redisHash:"har"`
-// 		Nested nested
-// 	}
+			actualTtl, err = redisClient.TTL("{redisobj:root:UUID}.__EXISTS__").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-// 	objStore := redisobj.NewStore(redisClient)
+			if testCase.options.EnableCaching {
+				actualTtl, err = redisClient.TTL("{redisobj:root:UUID}.__HASH__").Result()
+				assert.Nil(t, err)
+				assert.Equal(t, testCase.expectedTtl, actualTtl)
+			}
 
-// 	testCases := []struct {
-// 		description        string
-// 		writeObject        value
-// 		options            []redisobj.Option
-// 		expectedReadObject value
-// 		expectedValueTtl   time.Duration
-// 		expectedHarTtl     time.Duration
-// 		expectedNestedTtl  time.Duration
-// 	}{
-// 		{
-// 			description: "option if exists (command not available for HSET so this will set the value)",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionIfExists,
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedValueTtl:  ttlInfinite,
-// 			expectedHarTtl:    ttlInfinite,
-// 			expectedNestedTtl: ttlInfinite,
-// 		},
-// 		{
-// 			description: "write/read object that does not exist in redis",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedValueTtl:  ttlInfinite,
-// 			expectedHarTtl:    ttlInfinite,
-// 			expectedNestedTtl: ttlInfinite,
-// 		},
-// 		{
-// 			description: "write/read object that already exists in redis",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedValueTtl:  ttlInfinite,
-// 			expectedHarTtl:    ttlInfinite,
-// 			expectedNestedTtl: ttlInfinite,
-// 		},
-// 		{
-// 			description: "option set ttl",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionTtl(10 * time.Minute),
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedValueTtl:  10 * time.Minute,
-// 			expectedHarTtl:    10 * time.Minute,
-// 			expectedNestedTtl: 10 * time.Minute,
-// 		},
-// 		{
-// 			description: "option if not exists (already exists so write should not occur)",
-// 			writeObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 999,
-// 				Har: map[int]int{
-// 					999: 999,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "OVERRIDE",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			options: []redisobj.Option{
-// 				redisobj.OptionIfNotExists,
-// 			},
-// 			expectedReadObject: value{
-// 				Foo: "my_foo",
-// 				Bar: 5,
-// 				Har: map[int]int{
-// 					1: 2,
-// 					3: 4,
-// 					5: 6,
-// 				},
-// 				Nested: nested{
-// 					NestedString: "nested_foo",
-// 					NestedInt:    15,
-// 				},
-// 			},
-// 			expectedValueTtl:  10 * time.Minute,
-// 			expectedHarTtl:    10 * time.Minute,
-// 			expectedNestedTtl: 10 * time.Minute,
-// 		},
-// 	}
-// 	for _, testCase := range testCases {
-// 		t.Run(testCase.description, func(t *testing.T) {
-// 			var err error
+			actualTtl, err = redisClient.TTL("{redisobj:root:UUID}.Map").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
 
-// 			err = objStore.Write(testCase.writeObject, testCase.options...)
-// 			assert.Nil(t, err)
-
-// 			readObject := value{
-// 				Foo: testCase.expectedReadObject.Foo,
-// 				Nested: nested{
-// 					NestedInt: testCase.expectedReadObject.Nested.NestedInt,
-// 				},
-// 			}
-// 			err = objStore.Read(&readObject)
-// 			assert.Nil(t, err)
-
-// 			assert.Equal(t, testCase.expectedReadObject, readObject)
-
-// 			actualTtl, err := redisClient.TTL("redisobj:value:my_foo").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedValueTtl, actualTtl)
-
-// 			actualTtl, err = redisClient.TTL("redisobj:value:my_foo:har").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedHarTtl, actualTtl)
-
-// 			actualTtl, err = redisClient.TTL("redisobj:value:my_foo:nested:15").Result()
-// 			assert.Nil(t, err)
-// 			assert.Equal(t, testCase.expectedNestedTtl, actualTtl)
-// 		})
-// 	}
-// }
+			actualTtl, err = redisClient.TTL("{redisobj:root:UUID}.Slice").Result()
+			assert.Nil(t, err)
+			assert.Equal(t, testCase.expectedTtl, actualTtl)
+		})
+	}
+}
