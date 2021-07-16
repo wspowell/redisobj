@@ -11,6 +11,9 @@ jobs:
   container-job:
     runs-on: ubuntu-latest
     
+    container:
+      image: golang:1.16.6
+    
     services:
       redis:
         image: redis:6.2.4
@@ -19,11 +22,11 @@ jobs:
         
     steps:
     - uses: actions/checkout@v2
-
-    - name: Set up Go
-      uses: actions/setup-go@v2
-      with:
-        go-version: 1.16
+      env:
+        # use mongodb for the host here because we have specified a container for the job.
+        # If we were running the job on the VM this would be localhost
+        REDIS_HOST: redis
+        REDIS_PORT: 6379
 
     - name: Build
       run: go build -v -race ./...
